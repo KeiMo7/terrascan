@@ -44,6 +44,7 @@ func (me EngineOutput) AsViolationStore() results.ViolationStore {
 		Vulnerabilities:   me.Vulnerabilities,
 		SkippedViolations: me.SkippedViolations,
 		PassedRules:       me.PassedRules,
+		UndecidedRules:    me.UndecidedRules,
 		Summary:           me.Summary,
 	}
 }

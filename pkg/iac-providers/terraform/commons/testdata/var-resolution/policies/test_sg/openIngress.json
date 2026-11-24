@@ -1,0 +1,13 @@
+{
+  "name": "openIngress",
+  "file": "openIngress.rego",
+  "policy_type": "aws",
+  "resource_type": "aws_security_group",
+  "template_args": {},
+  "severity": "HIGH",
+  "description": "Security group must not allow ingress from 0.0.0.0/0.",
+  "reference_id": "TEST.SG.OpenIngress",
+  "category": "Network Security",
+  "version": 1,
+  "id": "TEST.SG.OpenIngress"
+}

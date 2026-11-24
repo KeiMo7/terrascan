@@ -49,6 +49,13 @@ func (s *ViolationStore) AddPassedRule(rule *PassedRule) {
 	s.PassedRules = append(s.PassedRules, rule)
 }
 
+// AddUndecidedRule adds a rule whose outcome could not be determined because
+// the resource has unresolved (pending) attributes.
+func (s *ViolationStore) AddUndecidedRule(rule *UndecidedRule) {
+	s.UndecidedRules = append(s.UndecidedRules, rule)
+	s.Summary.UndecidedPolicies++
+}
+
 // GetPassedRules Retrieves all passed rules from the violation store
 func (s *ViolationStore) GetPassedRules() []*PassedRule {
 	return s.PassedRules

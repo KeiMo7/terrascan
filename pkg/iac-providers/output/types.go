@@ -44,6 +44,21 @@ type ResourceConfig struct {
 	IsRemoteModule      *bool              `json:"is_remote_module,omitempty"`
 	TerraformVersion    string             `json:"terraform_version,omitempty"`
 	ProviderVersion     string             `json:"provider_version,omitempty"`
+
+	// PendingAttributes lists resource attributes whose value could not be
+	// determined because they reference an unresolved variable. They are
+	// surfaced to the policy layer as "undecidable" instead of being treated
+	// as a pass. This field is additive; fully resolved configs omit it.
+	PendingAttributes []PendingAttribute `json:"pending_attributes,omitempty" yaml:"pending_attributes,omitempty"`
+}
+
+// PendingAttribute identifies a single resource attribute that references a
+// variable whose value could not be determined.
+type PendingAttribute struct {
+	// Path is the dotted attribute path inside the resource config.
+	Path string `json:"path" yaml:"path"`
+	// Expression is the unresolved reference expression.
+	Expression string `json:"expression" yaml:"expression"`
 }
 
 // ContainerDetails holds information about container name, image and vulnerabilities

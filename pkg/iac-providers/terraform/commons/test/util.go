@@ -29,7 +29,10 @@ func prepareAllResourceConfigs(v output.AllResourceConfigs, modifySourceVal bool
 			}
 			// we pull latest version available for provider version hence is subject to change
 			item.ProviderVersion = ""
-
+			// pending_attributes is an additive field produced by variable
+			// value resolution. Golden fixtures predate it and are kept
+			// stable; its contents are covered by dedicated varscope tests.
+			item.PendingAttributes = nil
 			newkey := item.Source + "##" + item.ID
 			newval[key][newkey] = item
 		}

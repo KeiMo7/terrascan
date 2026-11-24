@@ -1,0 +1,13 @@
+{
+  "name": "bucketEncryptionOff",
+  "file": "bucketEncryptionOff.rego",
+  "policy_type": "aws",
+  "resource_type": "aws_s3_bucket",
+  "template_args": {},
+  "severity": "HIGH",
+  "description": "S3 bucket must have encryption enabled.",
+  "reference_id": "TEST.S3.Encryption",
+  "category": "Encryption",
+  "version": 1,
+  "id": "TEST.S3.Encryption"
+}

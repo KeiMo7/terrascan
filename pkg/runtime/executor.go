@@ -39,6 +39,13 @@ const (
 	useTerraformCache = "useTerraformCache"
 	nonRecursive      = "nonRecursive"
 	valuesFiles       = "valuesFiles"
+
+	// terraform external variable option keys, consumed by the terraform
+	// directory loader. They are additive and default to empty, so existing
+	// callers keep their current behavior.
+	tfVarFiles     = "tfVarFiles"
+	tfVars         = "tfVars"
+	tfAutoVarFiles = "tfAutoVarFiles"
 )
 
 // Executor object
@@ -65,10 +72,38 @@ type Executor struct {
 	repoURL                  string
 	repoRef                  string
 	valuesFiles              []string
+
+	// terraform external variable sources
+	tfVarFiles     []string
+	tfVars         map[string]string
+	tfAutoVarFiles bool
+}
+
+// ExecutorOption configures an Executor beyond the positional constructor
+// arguments. Existing callers ignore options entirely, so no new required
+// parameters are introduced.
+type ExecutorOption func(*Executor)
+
+// WithTFVarFiles supplies terraform values files (*.tfvars or *.tfvars.json)
+// applied after auto-discovered files, in the given order.
+func WithTFVarFiles(files []string) ExecutorOption {
+	return func(e *Executor) { e.tfVarFiles = files }
+}
+
+// WithTFVars supplies command-line style terraform variable overrides as
+// name=value pairs. These take precedence over values files and environment.
+func WithTFVars(vars map[string]string) ExecutorOption {
+	return func(e *Executor) { e.tfVars = vars }
+}
+
+// WithTFAutoVarFiles toggles automatic discovery of terraform.tfvars and
+// *.tfvars files in each scanned module directory. It defaults to enabled.
+func WithTFAutoVarFiles(enabled bool) ExecutorOption {
+	return func(e *Executor) { e.tfAutoVarFiles = enabled }
 }
 
 // NewExecutor creates a runtime object
-func NewExecutor(iacType, iacVersion string, policyTypes []string, filePath, dirPath string, policyPath, scanRules, skipRules, categories []string, severity string, nonRecursive, useTerraformCache, findVulnerabilities bool, notificationWebhookURL, notificationWebhookToken, repoURL, repoRef string, valuesFiles []string) (e *Executor, err error) {
+func NewExecutor(iacType, iacVersion string, policyTypes []string, filePath, dirPath string, policyPath, scanRules, skipRules, categories []string, severity string, nonRecursive, useTerraformCache, findVulnerabilities bool, notificationWebhookURL, notificationWebhookToken, repoURL, repoRef string, valuesFiles []string, opts ...ExecutorOption) (e *Executor, err error) {
 	e = &Executor{
 		filePath:                 filePath,
 		dirPath:                  dirPath,
@@ -85,6 +120,13 @@ func NewExecutor(iacType, iacVersion string, policyTypes []string, filePath, dir
 		repoURL:                  repoURL,
 		repoRef:                  repoRef,
 		valuesFiles:              valuesFiles,
+		tfAutoVarFiles:           true,
+		tfVars:                   map[string]string{},
+	}
+
+	// apply optional terraform variable configuration
+	for _, opt := range opts {
+		opt(e)
 	}
 
 	// assigning vulnerabilityEngine
@@ -412,5 +454,10 @@ func (e *Executor) buildOptions() map[string]interface{} {
 	options[useTerraformCache] = e.useTerraformCache
 	options[nonRecursive] = e.nonRecursive
 	options[valuesFiles] = e.valuesFiles
+
+	// terraform external variable sources
+	options[tfVarFiles] = e.tfVarFiles
+	options[tfVars] = e.tfVars
+	options[tfAutoVarFiles] = e.tfAutoVarFiles
 	return options
 }

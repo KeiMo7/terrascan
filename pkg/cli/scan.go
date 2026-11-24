@@ -82,5 +82,8 @@ func init() {
 	scanCmd.Flags().StringVarP(&scanOptions.repoURL, "repo-url", "", "", "URL of the repo being scanned, will be reflected in scan summary")
 	scanCmd.Flags().StringVarP(&scanOptions.repoRef, "repo-ref", "", "", "branch of the repo being scanned")
 	scanCmd.Flags().StringSliceVarP(&scanOptions.valuesFiles, "values-files", "", []string{}, "one or more values files to scan(applicable for iactype=helm) (example: --values-files=\"file1-values.yaml,file2-values.yaml\")")
+	scanCmd.Flags().StringSliceVarP(&scanOptions.tfVarFiles, "var-file", "", []string{}, "terraform values file in HCL (*.tfvars) or JSON (*.tfvars.json); repeatable, later files override earlier ones (example: --var-file=prod.tfvars)")
+	scanCmd.Flags().StringArrayVarP(&scanOptions.tfVars, "var", "", []string{}, "terraform variable override in name=value form; repeatable, takes precedence over values files and TF_VAR_* environment variables (example: --var=instance_count=3)")
+	scanCmd.Flags().BoolVarP(&scanOptions.tfAutoVarFiles, "auto-var-files", "", true, "automatically load terraform.tfvars and *.tfvars files present in each scanned terraform directory")
 	RegisterCommand(rootCmd, scanCmd)
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/tenable/terrascan/pkg/downloader"
 	"github.com/tenable/terrascan/pkg/iac-providers/output"
+	"github.com/tenable/terrascan/pkg/iac-providers/terraform/commons/varscope"
 	"github.com/tenable/terrascan/pkg/results"
 	"github.com/tenable/terrascan/pkg/utils"
 	"go.uber.org/zap"
@@ -69,6 +70,10 @@ type ModuleConfig struct {
 	Config           *hclConfigs.Config
 	ParentModuleCall *hclConfigs.ModuleCall
 	Name             string
+
+	// scope holds the resolved variable values visible in this module. It is
+	// nil only on legacy paths that never build a variable scope.
+	scope *varscope.Scope
 }
 
 // TerraformDirectoryLoader implements terraform directory loading
@@ -81,6 +86,12 @@ type TerraformDirectoryLoader struct {
 	errIacLoadDirs           *multierror.Error
 	terraformInitModuleCache map[string]TerraformModuleManifest
 	terraformVersion         string
+
+	// external variable sources
+	varFiles     []string
+	cliVars      map[string]string
+	envValues    map[string]varscope.ExternalValue
+	autoVarFiles bool
 }
 
 // NewTerraformDirectoryLoader creates a new terraformDirectoryLoader
@@ -91,6 +102,8 @@ func NewTerraformDirectoryLoader(rootDirectory, terraformVersion string, options
 		parser:                   hclConfigs.NewParser(afero.NewOsFs()),
 		terraformInitModuleCache: make(map[string]TerraformModuleManifest),
 		terraformVersion:         terraformVersion,
+		autoVarFiles:             true,
+		cliVars:                  map[string]string{},
 	}
 	for key, val := range options {
 		// keeping switch case in case more flags are added
@@ -99,9 +112,47 @@ func NewTerraformDirectoryLoader(rootDirectory, terraformVersion string, options
 			terraformDirectoryLoader.useTerraformCache = val.(bool)
 		case "nonRecursive":
 			terraformDirectoryLoader.nonRecursive = val.(bool)
+		case optionVarFiles:
+			terraformDirectoryLoader.varFiles = toStringSlice(val)
+		case optionVars:
+			terraformDirectoryLoader.cliVars = toStringMap(val)
+		case optionEnvVars:
+			if m, ok := val.(map[string]varscope.ExternalValue); ok {
+				terraformDirectoryLoader.envValues = m
+			}
+		case optionAutoVarFiles:
+			if b, ok := val.(bool); ok {
+				terraformDirectoryLoader.autoVarFiles = b
+			}
 		}
 	}
 	return terraformDirectoryLoader
+}
+
+// toStringSlice tolerates both []string and []interface{} option values.
+func toStringSlice(val interface{}) []string {
+	switch v := val.(type) {
+	case []string:
+		return v
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// toStringMap tolerates map[string]string option values.
+func toStringMap(val interface{}) map[string]string {
+	if m, ok := val.(map[string]string); ok {
+		return m
+	}
+	return map[string]string{}
 }
 
 // LoadIacDir starts traversing from the given rootDir and traverses through
@@ -171,6 +222,20 @@ func (t TerraformDirectoryLoader) loadDirRecursive(dirList []string) (output.All
 			t.addError(errMessage, dir)
 		}
 
+		// build the root variable scope from every external source
+		var rootScope *varscope.Scope
+		if unified != nil && unified.Root != nil {
+			vi := t.buildVariableInputs(dir, unified.Root.Module.Variables)
+			for _, vErr := range vi.Errors {
+				t.addError(vErr.Error(), dir)
+			}
+			var scopeErrs []error
+			rootScope, scopeErrs = varscope.NewRootScope("root", vi.RootInput)
+			for _, vErr := range scopeErrs {
+				t.addError(vErr.Error(), dir)
+			}
+		}
+
 		/*
 			The "unified" config created from BuildConfig in the previous step
 			represents a tree structure with rootDir module being at its root and
@@ -182,7 +247,7 @@ func (t TerraformDirectoryLoader) loadDirRecursive(dirList []string) (output.All
 		*/
 
 		// queue of for BFS, add root module config to it
-		root := &ModuleConfig{Config: unified.Root, Name: "root"}
+		root := &ModuleConfig{Config: unified.Root, Name: "root", scope: rootScope}
 		configsQ := []*ModuleConfig{root}
 
 		// using BFS traverse through all modules in the unified config tree
@@ -194,7 +259,7 @@ func (t TerraformDirectoryLoader) loadDirRecursive(dirList []string) (output.All
 			configsQ = configsQ[1:]
 
 			// reference resolver
-			r := NewRefResolver(current.Config, current.ParentModuleCall)
+			r := NewScopedRefResolver(current.Config, current.ParentModuleCall, current.scope)
 			// traverse through all current's resources
 			for _, managedResource := range current.Config.Module.ManagedResources {
 
@@ -211,7 +276,13 @@ func (t TerraformDirectoryLoader) loadDirRecursive(dirList []string) (output.All
 				resourceConfig.ModuleName = current.Name
 
 				// resolve references
-				resourceConfig.Config = r.ResolveRefs(resourceConfig.Config.(jsonObj))
+				resolved := r.ResolveRefs(resourceConfig.Config.(jsonObj))
+				resourceConfig.Config = resolved
+
+				// record any attribute that could not be decided
+				if current.scope != nil {
+					resourceConfig.PendingAttributes = MaskSensitivePending(CollectPendingAttributes(resolved), current.scope)
+				}
 
 				var isRemoteModule bool
 				// source file path
@@ -247,7 +318,7 @@ func (t TerraformDirectoryLoader) loadDirRecursive(dirList []string) (output.All
 			}
 
 			// add all current's children to the queue
-			configsQ = append(configsQ, current.getChildConfigs()...)
+			configsQ = append(configsQ, current.getScopedChildConfigs(r)...)
 		}
 	}
 
@@ -301,6 +372,20 @@ func (t TerraformDirectoryLoader) loadDirNonRecursive() (output.AllResourceConfi
 		t.addError(ErrBuildTFConfigDir.Error(), t.absRootDir)
 	}
 
+	// build the root variable scope from every external source
+	var rootScope *varscope.Scope
+	if unified != nil && unified.Root != nil {
+		vi := t.buildVariableInputs(t.absRootDir, unified.Root.Module.Variables)
+		for _, vErr := range vi.Errors {
+			t.addError(vErr.Error(), t.absRootDir)
+		}
+		var scopeErrs []error
+		rootScope, scopeErrs = varscope.NewRootScope("root", vi.RootInput)
+		for _, vErr := range scopeErrs {
+			t.addError(vErr.Error(), t.absRootDir)
+		}
+	}
+
 	/*
 		The "unified" config created from BuildConfig in the previous step
 		represents a tree structure with rootDir module being at its root and
@@ -312,7 +397,7 @@ func (t TerraformDirectoryLoader) loadDirNonRecursive() (output.AllResourceConfi
 	*/
 
 	// queue of for BFS, add root module config to it
-	root := &ModuleConfig{Config: unified.Root, Name: "root"}
+	root := &ModuleConfig{Config: unified.Root, Name: "root", scope: rootScope}
 	configsQ := []*ModuleConfig{root}
 
 	// using BFS traverse through all modules in the unified config tree
@@ -324,7 +409,7 @@ func (t TerraformDirectoryLoader) loadDirNonRecursive() (output.AllResourceConfi
 		configsQ = configsQ[1:]
 
 		// reference resolver
-		r := NewRefResolver(current.Config, current.ParentModuleCall)
+		r := NewScopedRefResolver(current.Config, current.ParentModuleCall, current.scope)
 
 		// traverse through all current's resources
 		for _, managedResource := range current.Config.Module.ManagedResources {
@@ -339,7 +424,14 @@ func (t TerraformDirectoryLoader) loadDirNonRecursive() (output.AllResourceConfi
 			resourceConfig.ModuleName = current.Name
 
 			// resolve references
-			resourceConfig.Config = r.ResolveRefs(resourceConfig.Config.(jsonObj))
+			resolved := r.ResolveRefs(resourceConfig.Config.(jsonObj))
+			resourceConfig.Config = resolved
+
+			// record any attribute that could not be decided
+			if current.scope != nil {
+				resourceConfig.PendingAttributes = MaskSensitivePending(CollectPendingAttributes(resolved), current.scope)
+			}
+
 			var isRemoteModule bool
 			// source file path
 			resourceConfig.Source, isRemoteModule, err = GetConfigSource(remoteURLMapping, resourceConfig, t.absRootDir)
@@ -370,7 +462,7 @@ func (t TerraformDirectoryLoader) loadDirNonRecursive() (output.AllResourceConfi
 		}
 
 		// add all current's children to the queue
-		configsQ = append(configsQ, current.getChildConfigs()...)
+		configsQ = append(configsQ, current.getScopedChildConfigs(r)...)
 	}
 
 	// successful
@@ -485,6 +577,25 @@ func (m *ModuleConfig) getChildConfigs() []*ModuleConfig {
 		allConfigs = append(allConfigs, childModuleConfig)
 	}
 	return allConfigs
+}
+
+// getScopedChildConfigs builds child module configs with their own variable
+// scopes. Call arguments are evaluated against the parent scope and override
+// the child's defaults only inside that child; parent values never leak in
+// except through explicit arguments, and each call site gets an independent
+// scope.
+func (m *ModuleConfig) getScopedChildConfigs(parentResolver *RefResolver) []*ModuleConfig {
+	children := m.getChildConfigs()
+	for _, child := range children {
+		call := child.ParentModuleCall
+		if call == nil || m.scope == nil || child.Config == nil {
+			// retain legacy behavior when scoping is unavailable
+			continue
+		}
+		args := EvaluateModuleCallArgs(call, m.scope, parentResolver)
+		child.scope = varscope.NewChildScope(child.Name, child.Config.Module.Variables, m.scope, args)
+	}
+	return children
 }
 
 // GetRemoteLocation checks wether the source belongs to the remote module present in downloader cache.

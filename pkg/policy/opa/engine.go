@@ -379,6 +379,17 @@ func (e *Engine) Evaluate(engineInput policy.EngineInput, filter policy.PreScanF
 		resourceViolations := rs[0].Expressions[0].Value.([]interface{})
 		if len(resourceViolations) == 0 {
 			zap.S().Debug("query executed but found no violations", zap.Error(err), zap.String("rule", "'"+k+"'"))
+
+			// Resources with pending (undecidable) attributes must not be
+			// counted as a pass. If this rule applies to such a resource,
+			// record it as undecided instead.
+			undecided := e.collectUndecided(e.regoDataMap[k], engineInput)
+			if len(undecided) > 0 {
+				for _, rule := range undecided {
+					e.results.ViolationStore.AddUndecidedRule(rule)
+				}
+				continue
+			}
 			// add the passed rule
 			e.reportPassed(e.regoDataMap[k])
 			continue

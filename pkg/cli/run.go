@@ -19,6 +19,7 @@ package cli
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -123,6 +124,15 @@ type ScanOptions struct {
 
 	// valuesFiles is the array of helm values file
 	valuesFiles []string
+
+	// tfVarFiles are terraform values files (*.tfvars / *.tfvars.json)
+	tfVarFiles []string
+
+	// tfVars are terraform -var name=value overrides
+	tfVars []string
+
+	// tfAutoVarFiles toggles automatic discovery of *.tfvars files
+	tfAutoVarFiles bool
 }
 
 // NewScanOptions returns a new pointer to ScanOptions
@@ -206,9 +216,16 @@ func (s *ScanOptions) Run() error {
 	}
 
 	// create a new runtime executor for processing IaC
+	tfVarOverrides, err := parseTFVarOverrides(s.tfVars)
+	if err != nil {
+		return err
+	}
 	executor, err := runtime.NewExecutor(s.iacType, s.iacVersion, s.policyType, s.iacFilePath, s.iacDirPath,
 		s.policyPath, s.scanRules, s.skipRules, s.categories, s.severity, s.nonRecursive, s.useTerraformCache,
 		s.findVulnerabilities, s.notificationWebhookURL, s.notificationWebhookToken, s.repoURL, s.repoRef, s.valuesFiles,
+		runtime.WithTFVarFiles(s.tfVarFiles),
+		runtime.WithTFVars(tfVarOverrides),
+		runtime.WithTFAutoVarFiles(s.tfAutoVarFiles),
 	)
 	if err != nil {
 		return err
@@ -291,13 +308,36 @@ func (s ScanOptions) writeResults(results runtime.Output) error {
 
 // getExitCode returns appropriate exit code for terrascan based on scan output
 func getExitCode(o runtime.Output) int {
-	if len(o.Violations.ViolationStore.DirScanErrors) > 0 {
-		if o.Violations.ViolationStore.Summary.ViolatedPolicies > 0 {
+	store := o.Violations.ViolationStore
+	if len(store.DirScanErrors) > 0 {
+		if store.Summary.ViolatedPolicies > 0 {
 			return 5
 		}
 		return 4
-	} else if o.Violations.ViolationStore.Summary.ViolatedPolicies > 0 {
+	} else if store.Summary.ViolatedPolicies > 0 {
 		return 3
+	} else if store.Summary.UndecidedPolicies > 0 {
+		// undecidable checks are not a pass: signal them distinctly so CI does
+		// not treat an unknown-value scan as successful
+		return 6
 	}
 	return 0
+}
+
+// parseTFVarOverrides converts raw "name=value" -var arguments into a map and
+// fails loudly on malformed input rather than silently dropping an override.
+func parseTFVarOverrides(assignments []string) (map[string]string, error) {
+	overrides := make(map[string]string, len(assignments))
+	for _, assignment := range assignments {
+		idx := strings.IndexByte(assignment, '=')
+		if idx <= 0 {
+			return nil, fmt.Errorf("invalid --var argument %q: expected name=value", assignment)
+		}
+		name := strings.TrimSpace(assignment[:idx])
+		if name == "" {
+			return nil, fmt.Errorf("invalid --var argument %q: variable name is empty", assignment)
+		}
+		overrides[name] = assignment[idx+1:]
+	}
+	return overrides, nil
 }

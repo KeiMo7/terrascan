@@ -22,6 +22,7 @@ import (
 	"regexp"
 
 	hclConfigs "github.com/hashicorp/terraform/configs"
+	"github.com/tenable/terrascan/pkg/iac-providers/terraform/commons/varscope"
 	"go.uber.org/zap"
 )
 
@@ -35,6 +36,11 @@ var (
 type RefResolver struct {
 	Config           *hclConfigs.Config
 	ParentModuleCall *hclConfigs.ModuleCall
+
+	// scope holds the resolved variable values visible in this module. It may
+	// be nil for legacy call paths; when present it takes precedence over the
+	// default-only resolution and enables pending (undecidable) detection.
+	scope *varscope.Scope
 }
 
 // NewRefResolver returns a new RefResolver struct
@@ -44,6 +50,16 @@ func NewRefResolver(config *hclConfigs.Config,
 		Config:           config,
 		ParentModuleCall: parentModuleCall,
 	}
+}
+
+// NewScopedRefResolver returns a RefResolver bound to a resolved variable
+// scope. The scope is consulted first for every variable reference; unknown
+// variables are recorded as pending instead of being silently passed.
+func NewScopedRefResolver(config *hclConfigs.Config,
+	parentModuleCall *hclConfigs.ModuleCall, scope *varscope.Scope) *RefResolver {
+	r := NewRefResolver(config, parentModuleCall)
+	r.scope = scope
+	return r
 }
 
 // isRef returns true if the given string is a variable reference
@@ -156,6 +172,20 @@ func (r *RefResolver) ResolveStrRef(ref, callerRef string) interface{} {
 			- resolve variables initialized in parent module call
 			- resolve variables initialized in same module
 		*/
+
+		// A resolved, concrete value from the variable scope is authoritative:
+		// external values (env, tfvars, cli), module call arguments and
+		// defaults have already been merged with the correct precedence and
+		// type conversion. Undeclared or still-pending variables deliberately
+		// fall through to the legacy resolver so their output stays identical
+		// to previous releases; the only addition for those is the pending
+		// marker that turns an unknown value into an undecidable result.
+		if r.scope != nil {
+			varName, _ := getVarName(ref)
+			if rv, ok := r.scope.Lookup(varName); ok && !rv.Pending {
+				return r.ResolveScopedVar(ref, callerRef)
+			}
+		}
 
 		// 1. resolve variables initialized in parent module call
 		val := r.ResolveVarRefFromParentModuleCall(ref, callerRef)

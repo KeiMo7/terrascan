@@ -644,6 +644,14 @@ func Test_getExitCode(t *testing.T) {
 		},
 	}
 
+	scanOutputWithUndecidedOnly := runtime.Output{
+		Violations: policy.EngineOutput{
+			ViolationStore: &results.ViolationStore{
+				Summary: results.ScanSummary{UndecidedPolicies: 2},
+			},
+		},
+	}
+
 	type args struct {
 		o runtime.Output
 	}
@@ -672,6 +680,13 @@ func Test_getExitCode(t *testing.T) {
 				o: scanOutputWithViolatedPoliciesOnly,
 			},
 			want: 3,
+		},
+		{
+			name: "has undecided policies but no violations or scan errors",
+			args: args{
+				o: scanOutputWithUndecidedOnly,
+			},
+			want: 6,
 		},
 		{
 			name: "neither violations nor directory scan errors",

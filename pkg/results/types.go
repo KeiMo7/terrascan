@@ -49,12 +49,42 @@ type PassedRule struct {
 	Category    string `json:"category" yaml:"category" xml:"category,attr"`
 }
 
+// UndecidedRule contains information of a rule whose pass/fail outcome could
+// not be determined because one or more of the resource attributes it depends
+// on reference variables whose values are unknown. An undecided rule must
+// never be reported as a pass: that would turn unknown values into a false
+// sense of security.
+type UndecidedRule struct {
+	RuleName     string `json:"rule_name" yaml:"rule_name" xml:"rule_name,attr"`
+	Description  string `json:"description" yaml:"description" xml:"description,attr"`
+	RuleID       string `json:"rule_id" yaml:"rule_id" xml:"rule_id,attr"`
+	Severity     string `json:"severity" yaml:"severity" xml:"severity,attr"`
+	Category     string `json:"category" yaml:"category" xml:"category,attr"`
+	ResourceName string `json:"resource_name" yaml:"resource_name" xml:"resource_name,attr"`
+	ResourceType string `json:"resource_type" yaml:"resource_type" xml:"resource_type,attr"`
+	ModuleName   string `json:"module_name,omitempty" yaml:"module_name,omitempty" xml:"module_name,attr,omitempty"`
+	File         string `json:"file,omitempty" yaml:"file,omitempty" xml:"file,attr,omitempty"`
+	PlanRoot     string `json:"plan_root,omitempty" yaml:"plan_root,omitempty" xml:"plan_root,attr,omitempty"`
+	LineNumber   int    `json:"line,omitempty" yaml:"line,omitempty" xml:"line,attr,omitempty"`
+	// PendingAttributes are the unresolved attributes that made the rule
+	// undecidable for this resource. Sensitive variable names are masked here.
+	PendingAttributes []PendingAttribute `json:"pending_attributes,omitempty" yaml:"pending_attributes,omitempty" xml:"pending_attributes>pending_attribute,omitempty"`
+}
+
+// PendingAttribute mirrors output.PendingAttribute in the results layer so
+// that reports stay self-contained without importing the iac provider package.
+type PendingAttribute struct {
+	Path       string `json:"path" yaml:"path" xml:"path,attr"`
+	Expression string `json:"expression" yaml:"expression" xml:"expression,attr"`
+}
+
 // ViolationStore Storage area for violation data
 type ViolationStore struct {
 	DirScanErrors     []DirScanErr     `json:"scan_errors,omitempty" yaml:"scan_errors,omitempty" xml:"scan_errors>scan_error,omitempty"`
 	PassedRules       []*PassedRule    `json:"passed_rules,omitempty" yaml:"passed_rules,omitempty" xml:"passed_rules>passed_rule,omitempty"`
 	Violations        []*Violation     `json:"violations" yaml:"violations" xml:"violations>violation"`
 	SkippedViolations []*Violation     `json:"skipped_violations" yaml:"skipped_violations" xml:"skipped_violations>violation"`
+	UndecidedRules    []*UndecidedRule `json:"undecided_rules,omitempty" yaml:"undecided_rules,omitempty" xml:"undecided_rules>undecided_rule,omitempty"`
 	Vulnerabilities   []*Vulnerability `json:"vulnerabilities,omitempty" yaml:"vulnerabilities,omitempty"`
 	Summary           ScanSummary      `json:"scan_summary" yaml:"scan_summary" xml:"scan_summary"`
 }
@@ -68,6 +98,7 @@ type ScanSummary struct {
 	ShowViolationDetails bool   `json:"-" yaml:"-" xml:"-"`
 	TotalPolicies        int    `json:"policies_validated" yaml:"policies_validated" xml:"policies_validated,attr"`
 	ViolatedPolicies     int    `json:"violated_policies" yaml:"violated_policies" xml:"violated_policies,attr"`
+	UndecidedPolicies    int    `json:"undecided_policies,omitempty" yaml:"undecided_policies,omitempty" xml:"undecided_policies,attr,omitempty"`
 	Vulnerabilities      *int   `json:"vulnerabilities,omitempty" yaml:"vulnerabilities,omitempty"`
 	LowCount             int    `json:"low" yaml:"low" xml:"low,attr"`
 	MediumCount          int    `json:"medium" yaml:"medium" xml:"medium,attr"`
@@ -118,12 +149,14 @@ func (vs ViolationStore) Add(extra ViolationStore) ViolationStore {
 	vs.Violations = append(vs.Violations, extra.Violations...)
 	vs.SkippedViolations = append(vs.SkippedViolations, extra.SkippedViolations...)
 	vs.PassedRules = append(vs.PassedRules, extra.PassedRules...)
+	vs.UndecidedRules = append(vs.UndecidedRules, extra.UndecidedRules...)
 
 	// Add the scan summary
 	vs.Summary.LowCount += extra.Summary.LowCount
 	vs.Summary.MediumCount += extra.Summary.MediumCount
 	vs.Summary.HighCount += extra.Summary.HighCount
 	vs.Summary.ViolatedPolicies += extra.Summary.ViolatedPolicies
+	vs.Summary.UndecidedPolicies += extra.Summary.UndecidedPolicies
 	vs.Summary.TotalPolicies += extra.Summary.TotalPolicies
 
 	return vs

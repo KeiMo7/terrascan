@@ -48,6 +48,13 @@ Passed Rules -
 	-----------------------------------------------------------------------
 	{{end}}
 {{end}}
+{{- if (gt (len .ViolationStore.UndecidedRules) 0) }}
+Undecided Rules (could not be determined - not treated as passed) -
+    {{range $index, $element := .ViolationStore.UndecidedRules}}
+	{{undecidedRules $element | printf "%s"}}
+	-----------------------------------------------------------------------
+	{{end}}
+{{end}}
 {{- if (gt (len .ViolationStore.Violations) 0) }}
 Violation Details -
 	{{- $showDetails := .ViolationStore.Summary.ShowViolationDetails}}
@@ -96,6 +103,7 @@ func HumanReadableWriter(data interface{}, writers []io.Writer) error {
 		"passedRules":            passedRules,
 		"defaultVulnerabilities": defaultVulnerabilities,
 		"dirScanErrors":          dirScanErrors,
+		"undecidedRules":         undecidedRules,
 	}).Parse(defaultTemplate)
 	if err != nil {
 		zap.S().Errorf("failed to write human readable output. error: '%v'", err)
@@ -217,5 +225,22 @@ func dirScanErrors(d results.DirScanErr) string {
 		"IaC Type", d.IacType,
 		"Directory", d.Directory,
 		"Error Message", d.ErrMessage)
+	return out
+}
+
+func undecidedRules(v results.UndecidedRule) string {
+	out := fmt.Sprintf("%-15v:\t%s\n\t%-15v:\t%s\n\t%-15v:\t%s\n\t%-15v:\t%s\n\t%-15v:\t%s\n\t%-20v:\t%s\n\t%-20v:\t%s\n\t",
+		"Rule ID", v.RuleID,
+		"Rule Name", v.RuleName,
+		"Description", v.Description,
+		"Severity", v.Severity,
+		"Category", v.Category,
+		"Resource Name", v.ResourceName,
+		"Resource Type", v.ResourceType)
+	if len(v.PendingAttributes) > 0 {
+		for _, p := range v.PendingAttributes {
+			out += fmt.Sprintf("%-20v:\t%s (%s)\n\t", "Undecidable Attr", p.Path, p.Expression)
+		}
+	}
 	return out
 }
